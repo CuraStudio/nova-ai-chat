@@ -207,3 +207,6 @@ modelStatus.textContent = modelSelect.value || "Modell auswählen";
 
 messagesElement.hidden = true;
 loadModels();
+
+welcome.hidden = true;
+messagesElement.hidden = false;
