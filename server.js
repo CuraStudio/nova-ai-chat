@@ -165,7 +165,7 @@ res.status(error.status || 502).json({
 }
 });
 
-app.get("*", (req, res) => {
+app.get("/", (req, res) => {
 res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
