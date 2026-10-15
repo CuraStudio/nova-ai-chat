@@ -1,7 +1,7 @@
 
-const promptInput = document.getElementById("prompt");
+const promptInput = document.getElementById("messageInput");
 const chatForm = document.getElementById("chatForm");
-const sendBtn = document.getElementById("sendBtn");
+const sendBtn = document.getElementById("sendButton");
 const messagesEl = document.getElementById("messages");
 const welcomeEl = document.getElementById("welcome");
 
