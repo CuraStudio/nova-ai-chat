@@ -97,35 +97,41 @@ details: error.status ? error.message : undefined
 }
 });
 
+
 app.post("/api/chat", async (req, res) => {
-if (!requireApiKey(res)) return;
+  if (!requireApiKey(res)) return;
 
-const { model, messages } = req.body || {};
+  const { model, messages } = req.body || {};
 
-if (
-typeof model !== "string" ||
-model.length > 200 ||
-!Array.isArray(messages) ||
-messages.length === 0 ||
-messages.length > 40
-) {
-return res.status(400).json({
-error: "Ungültiges Modell oder ungültiger Chatverlauf."
-});
-}
+  // Das Modell ist optional: Der Server darf es automatisch auswählen.
+  if (
+    (model !== undefined &&
+      (typeof model !== "string" || model.length > 200)) ||
+    !Array.isArray(messages) ||
+    messages.length === 0 ||
+    messages.length > 40
+  ) {
+    return res.status(400).json({
+      error: "Ungültiger Chatverlauf."
+    });
+  }
 
-const validMessages = messages.every(message =>
-message &&
-["system", "user", "assistant"].includes(message.role) &&
-typeof message.content === "string" &&
-message.content.length <= 12000
-);
+  const validMessages = messages.every(message =>
+    message &&
+    ["system", "user", "assistant"].includes(message.role) &&
+    typeof message.content === "string" &&
+    message.content.length <= 12000
+  );
 
-if (!validMessages) {
-return res.status(400).json({
-error: "Eine oder mehrere Nachrichten sind ungültig."
-});
-}
+  if (!validMessages) {
+    return res.status(400).json({
+      error: "Eine oder mehrere Nachrichten sind ungültig."
+    });
+  }
+
+  // Ab hier muss dein bisheriger Code innerhalb von
+  // app.post("/api/chat", ...) unverändert weitergehen.
+
 
 try {
 // Modell-ID gegen die vom Anbieter gemeldete Liste prüfen.
