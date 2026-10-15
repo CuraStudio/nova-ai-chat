@@ -37,7 +37,7 @@ return true;
 
 async function nvidiaRequest(endpoint, options = {}) {
 const response = await fetch(
-"${NVIDIA_BASE_URL}${endpoint}",
+`${NVIDIA_BASE_URL}${endpoint}`,
 {
 ...options,
 headers: {
