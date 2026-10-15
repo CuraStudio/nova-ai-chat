@@ -375,3 +375,39 @@ box-shadow: 12px 0 40px #0008;
 @media (max-width: 360px) {
 .suggestions { grid-template-columns: 1fr; }
 }
+
+/* Automatische KI-Auswahl und Antwortdetails */
+
+.message-content {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.answer-details {
+  margin-top: 12px;
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
+
+.answer-details summary {
+  cursor: pointer;
+  user-select: none;
+  padding: 6px 0;
+}
+
+.answer-model-info p {
+  margin: 5px 0;
+  overflow-wrap: anywhere;
+}
+
+.history-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
