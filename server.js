@@ -6,6 +6,7 @@ const rateLimit = require("express-rate-limit");
 dotenv.config();
 
 const app = express();
+app.set("trust proxy", 1);
 const PORT = process.env.PORT || 3000;
 const NVIDIA_API_KEY = process.env.NVIDIA_API_KEY;
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
