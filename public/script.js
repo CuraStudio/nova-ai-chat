@@ -1,212 +1,401 @@
-const modelSelect = document.getElementById("modelSelect");
-const messagesElement = document.getElementById("messages");
-const welcome = document.getElementById("welcome");
-const form = document.getElementById("chatForm");
-const input = document.getElementById("messageInput");
-const sendButton = document.getElementById("sendButton");
-const connectionStatus = document.getElementById("connectionStatus");
-const modelStatus = document.getElementById("modelStatus");
 
-let conversation = [];
-let busy = false;
+require("dotenv").config();
 
-function addMessage(role, content) {
-const article = document.createElement("article");
-article.className = "message ${role}";
+const express = require("express");
+const rateLimit = require("express-rate-limit");
+const path = require("path");
 
-const label = document.createElement("div");
-label.className = "message-label";
-label.textContent = role === "user" ? "Du" : "KI-Assistent";
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-const body = document.createElement("div");
-body.className = "message-content";
-body.textContent = content;
+app.set("trust proxy", 1);
+app.use(express.json({ limit: "1mb" }));
+app.use(express.static(path.join(__dirname, "public")));
 
-article.append(label, body);
-messagesElement.appendChild(article);
-article.scrollIntoView({ behavior: "smooth", block: "end" });
+const API_KEY = process.env.NVIDIA_API_KEY;
+const BASE_URL = (
+  process.env.NVIDIA_BASE_URL ||
+  "https://integrate.api.nvidia.com/v1"
+).replace(/\/+$/, "");
 
-return body;
+const DEFAULT_MODEL = process.env.NVIDIA_MODEL || "";
+
+const chatLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 20,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
+
+let modelCache = [];
+let modelCacheTime = 0;
+const MODEL_CACHE_MS = 5 * 60 * 1000;
+
+function getFriendlyName(id) {
+  const name = id.split("/").pop() || id;
+
+  return name
+    .replace(/[-_]/g, " ")
+    .replace(/\b(llm|instruct)\b/gi, (word) =>
+      word.toLowerCase() === "llm" ? "LLM" : "Instruct"
+    )
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function showError(message) {
-const article = document.createElement("article");
-article.className = "message assistant";
+async function getAvailableModels(forceRefresh = false) {
+  if (
+    !forceRefresh &&
+    modelCache.length &&
+    Date.now() - modelCacheTime < MODEL_CACHE_MS
+  ) {
+    return modelCache;
+  }
 
-const label = document.createElement("div");
-label.className = "message-label";
-label.textContent = "Hinweis";
+  if (!API_KEY) {
+    throw new Error("NVIDIA_API_KEY fehlt in der Render-Umgebung.");
+  }
 
-const body = document.createElement("div");
-body.className = "message-content error-text";
-body.textContent = message;
+  const response = await fetch(`${BASE_URL}/models`, {
+    headers: {
+      Authorization: `Bearer ${API_KEY}`,
+    },
+    signal: AbortSignal.timeout(20000),
+  });
 
-article.append(label, body);
-messagesElement.appendChild(article);
+  if (!response.ok) {
+    throw new Error(`NVIDIA-Modellabfrage: HTTP ${response.status}`);
+  }
+
+  const result = await response.json();
+
+  const data = Array.isArray(result.data)
+    ? result.data
+    : Array.isArray(result.models)
+      ? result.models
+      : [];
+
+  modelCache = data
+    .map((item) => ({
+      id: item.id || item.name,
+      label: getFriendlyName(item.id || item.name || ""),
+    }))
+    .filter((model) => model.id)
+    // Textmodelle bevorzugen; offensichtliche Spezialmodelle ausschließen.
+    .filter(
+      (model) =>
+        !/embed|rerank|reward|guard|safety|classifier|whisper|tts|asr/i.test(
+          model.id
+        )
+    );
+
+  modelCacheTime = Date.now();
+
+  if (!modelCache.length) {
+    throw new Error("NVIDIA hat keine passenden Textmodelle geliefert.");
+  }
+
+  return modelCache;
 }
 
-function updateLayout() {
-const hasMessages = conversation.length > 0;
-welcome.hidden = hasMessages;
-messagesElement.hidden = !hasMessages;
+// Heuristische Bewertung: Qualität zuerst, passend zur Aufgabenart.
+// Das ist eine Auswahlhilfe, kein unabhängiger Qualitätstest.
+function scoreModel(model, task) {
+  const id = model.id.toLowerCase();
+  let score = 0;
+
+  // Häufig geeignete allgemeine Chat-/Instruct-Modelle bevorzugen.
+  if (/instruct|chat/i.test(id)) score += 20;
+  if (/reasoning|reasoner|thinking|deepseek-r|qwq/i.test(id)) {
+    score += task === "reasoning" || task === "coding" ? 35 : 10;
+  }
+
+  // Bekannte Modellfamilien als grobe Heuristik.
+  if (/deepseek|qwen|llama|nemotron|kimi|glm|mistral/i.test(id)) {
+    score += 15;
+  }
+
+  if (/70b|72b|110b|120b|235b|405b|671b|large|ultra/i.test(id)) {
+    score += 25;
+  }
+  if (/8b|7b|3b|1b|nano|tiny|mini/i.test(id)) {
+    score -= 15;
+  }
+
+  if (task === "coding") {
+    if (/coder|code|codestral|deepseek/i.test(id)) score += 35;
+  }
+
+  if (task === "creative") {
+    if (/llama|qwen|mistral|kimi|large/i.test(id)) score += 15;
+  }
+
+  if (task === "reasoning") {
+    if (/reason|thinking|deepseek|qwq|nemotron/i.test(id)) score += 30;
+  }
+
+  if (task === "general" && /instruct|chat/i.test(id)) score += 10;
+
+  return score;
 }
 
-async function loadModels() {
-modelSelect.replaceChildren(
-new Option("Modelle werden geladen …", "")
-);
-connectionStatus.textContent = "Verbindung wird geprüft …";
+function detectTask(messages) {
+  const text = messages
+    .filter((message) => message.role === "user")
+    .map((message) => message.content)
+    .join("\n")
+    .toLowerCase();
 
-try {
-const response = await fetch("/api/models");
-const data = await response.json();
+  if (
+    /programmier|programming|code\b|javascript|python|html|css|bug|fehler im code|api bauen|server\.js/.test(
+      text
+    )
+  ) {
+    return "coding";
+  }
 
-if (!response.ok) {
-  throw new Error(data.error || "Modelle nicht verfügbar.");
+  if (
+    /beweise|beweisführung|logik|mathematisch|komplexe analyse|schritt für schritt herleiten|strateg|debugg/.test(
+      text
+    )
+  ) {
+    return "reasoning";
+  }
+
+  if (
+    /roman|geschichte|kapitel|dialog|kreativ|kreative|figur|charakter|story|gedicht|schreib.*szene/.test(
+      text
+    )
+  ) {
+    return "creative";
+  }
+
+  return "general";
 }
 
-const models = data.models || [];
-
-if (!models.length) {
-  throw new Error("Der Anbieter hat keine Modelle gemeldet.");
+function getErrorText(body) {
+  if (typeof body?.error === "string") return body.error;
+  if (body?.error?.message) return body.error.message;
+  return "";
 }
 
-modelSelect.replaceChildren();
+function shouldTryFallback(status, errorText = "") {
+  // Bei Authentifizierungsfehlern nicht blind weitere Modelle probieren.
+  if (status === 401 || status === 403) return false;
 
-for (const model of models) {
-  modelSelect.add(
-    new Option(model.name || model.id, model.id)
+  // Bei ungültigem Modell, Überlastung oder Serverfehlern wechseln.
+  return (
+    [400, 404, 408, 409, 422, 429, 500, 502, 503, 504].includes(status) ||
+    /model.*(not found|unavailable|unsupported)|overload|temporarily unavailable/i.test(
+      errorText
+    )
   );
 }
 
-connectionStatus.textContent =
-  `${models.length} Modelle gemeldet`;
-modelStatus.textContent = "NVIDIA · Modell auswählen";
-
-} catch (error) {
-modelSelect.replaceChildren(
-new Option("Keine Modelle verfügbar", "")
-);
-connectionStatus.textContent = "Verbindung nicht verfügbar";
-modelStatus.textContent = "Verbindung prüfen";
-showError(error.message);
-}
-}
-
-async function sendMessage(text) {
-const message = text.trim();
-
-if (!message || busy) return;
-
-if (!modelSelect.value) {
-showError("Bitte wähle zuerst ein verfügbares Modell aus.");
-return;
-}
-
-busy = true;
-sendButton.disabled = true;
-input.disabled = true;
-
-welcome.hidden = true;
-messagesElement.hidden = false;
-
-conversation.push({ role: "user", content: message });
-addMessage("user", message);
-
-input.value = "";
-
-const history = conversation.slice(-40);
-const loading = addMessage("assistant", "Antwort wird erstellt …");
-
-try {
-const response = await fetch("/api/chat", {
-method: "POST",
-headers: { "Content-Type": "application/json" },
-body: JSON.stringify({
-model: modelSelect.value,
-messages: history
-})
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
-const data = await response.json();
-
-if (!response.ok) {
-  throw new Error(data.error || "Die Anfrage ist fehlgeschlagen.");
-}
-
-const answer = typeof data.answer === "string"
-  ? data.answer
-  : JSON.stringify(data.answer);
-
-loading.textContent = answer || "Die KI hat leer geantwortet.";
-
-if (answer) {
-  conversation.push({
-    role: "assistant",
-    content: answer
+app.get("/api/health", (req, res) => {
+  res.json({
+    status: "ok",
+    provider: "NVIDIA",
+    configured: Boolean(API_KEY),
+    mode: "automatic-quality-first",
   });
-}
-
-modelStatus.textContent = data.model || modelSelect.value;
-
-} catch (error) {
-loading.textContent = "Fehler: ${error.message}";
-loading.classList.add("error-text");
-
-// Die nicht beantwortete Nachricht aus dem Verlauf entfernen.
-conversation.pop();
-
-} finally {
-busy = false;
-sendButton.disabled = false;
-input.disabled = false;
-input.focus();
-}
-}
-
-form.addEventListener("submit", event => {
-event.preventDefault();
-sendMessage(input.value);
 });
 
-input.addEventListener("keydown", event => {
-if (event.key === "Enter" && !event.shiftKey) {
-event.preventDefault();
-form.requestSubmit();
-}
+// Nur für optionale Anzeige in den Antwortdetails.
+app.get("/api/models", async (req, res) => {
+  try {
+    const models = await getAvailableModels();
+
+    res.json({
+      mode: "automatic",
+      models: models.map((model) => ({
+        id: model.id,
+        label: model.label,
+      })),
+    });
+  } catch (error) {
+    console.error("Modellliste fehlgeschlagen:", error.message);
+    res.status(502).json({
+      error: "Die Modellliste konnte nicht geladen werden.",
+    });
+  }
 });
 
-document.querySelectorAll("[data-prompt]").forEach(button => {
-button.addEventListener("click", () => {
-input.value = button.dataset.prompt;
-input.focus();
+app.post("/api/chat", chatLimiter, async (req, res) => {
+  try {
+    if (!API_KEY) {
+      return res.status(500).json({
+        error: "Der NVIDIA-API-Key ist auf dem Server nicht eingerichtet.",
+      });
+    }
+
+    const messages = req.body?.messages;
+
+    if (
+      !Array.isArray(messages) ||
+      messages.length === 0 ||
+      messages.length > 60
+    ) {
+      return res.status(400).json({
+        error: "Bitte sende einen gültigen Chatverlauf.",
+      });
+    }
+
+    const safeMessages = messages
+      .filter(
+        (message) =>
+          message &&
+          ["user", "assistant"].includes(message.role) &&
+          typeof message.content === "string"
+      )
+      .slice(-30)
+      .map((message) => ({
+        role: message.role,
+        content: message.content.slice(0, 30000),
+      }));
+
+    if (!safeMessages.length || safeMessages.at(-1).role !== "user") {
+      return res.status(400).json({
+        error: "Die letzte Nachricht muss eine Nutzernachricht sein.",
+      });
+    }
+
+    const task = detectTask(safeMessages);
+    const available = await getAvailableModels();
+
+    // Optionales festes Modell aus Render wird nur bevorzugt,
+    // wenn es tatsächlich in der Modellliste steht.
+    const pinned = DEFAULT_MODEL
+      ? available.find((model) => model.id === DEFAULT_MODEL)
+      : null;
+
+    const ranked = [...available].sort(
+      (a, b) => scoreModel(b, task) - scoreModel(a, task)
+    );
+
+    if (pinned) {
+      ranked.unshift(pinned);
+    }
+
+    const uniqueModels = [
+      ...new Map(ranked.map((model) => [model.id, model])).values(),
+    ];
+
+    // Maximal drei Versuche, um lange Wartezeiten zu begrenzen.
+    const candidates = uniqueModels.slice(0, 3);
+    let lastStatus = 502;
+    let lastError = "Kein Modell konnte die Anfrage beantworten.";
+
+    for (let i = 0; i < candidates.length; i++) {
+      const model = candidates[i];
+
+      try {
+        const response = await fetch(`${BASE_URL}/chat/completions`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: model.id,
+            messages: safeMessages,
+            temperature: task === "creative" ? 0.8 : 0.3,
+            max_tokens: 2048,
+            stream: false,
+          }),
+          signal: AbortSignal.timeout(90000),
+        });
+
+        const raw = await response.text();
+        let data;
+
+        try {
+          data = JSON.parse(raw);
+        } catch {
+          data = {};
+        }
+
+        if (response.ok) {
+          const answer = data.choices?.[0]?.message?.content;
+
+          if (typeof answer !== "string" || !answer.trim()) {
+            lastStatus = 502;
+            lastError = "Das Modell hat keine Textantwort zurückgegeben.";
+          } else {
+            return res.json({
+              answer: answer.trim(),
+              model: model.id,
+              modelName: model.label,
+              mode: "automatic",
+              task,
+              fallbackUsed: i > 0,
+            });
+          }
+        } else {
+          lastStatus = response.status;
+          lastError =
+            getErrorText(data) || `NVIDIA antwortete mit HTTP ${response.status}.`;
+
+          console.warn(
+            `Modellversuch ${i + 1}/${candidates.length} fehlgeschlagen:`,
+            model.id,
+            response.status,
+            lastError.slice(0, 300)
+          );
+
+          if (
+            !shouldTryFallback(response.status, lastError) ||
+            i === candidates.length - 1
+          ) {
+            break;
+          }
+        }
+      } catch (error) {
+        lastStatus = 502;
+        lastError = error.name === "TimeoutError"
+          ? "Zeitüberschreitung beim Modellaufruf."
+          : error.message || "Netzwerkfehler beim Modellaufruf.";
+
+        console.warn("Modellaufruf fehlgeschlagen:", model.id, lastError);
+
+        if (i === candidates.length - 1) break;
+      }
+    }
+
+    // Keine internen Details oder Zugangsdaten an den Browser senden.
+    console.error("Alle Modellversuche fehlgeschlagen:", lastStatus, lastError);
+
+    if (lastStatus === 401 || lastStatus === 403) {
+      return res.status(lastStatus).json({
+        error:
+          "NVIDIA hat den Zugriff abgelehnt. Prüfe den API-Key und die Berechtigungen für Chat-Anfragen.",
+      });
+    }
+
+    if (lastStatus === 429) {
+      return res.status(429).json({
+        error:
+          "NVIDIA meldet ein Nutzungslimit. Bitte warte kurz und versuche es erneut.",
+      });
+    }
+
+    return res.status(502).json({
+      error:
+        "Keines der getesteten Modelle konnte antworten. Bitte versuche es später erneut.",
+    });
+  } catch (error) {
+    console.error("Chat-Fehler:", error.message);
+
+    return res.status(500).json({
+      error: "Die Anfrage konnte nicht verarbeitet werden.",
+    });
+  }
 });
+
+app.listen(PORT, () => {
+  console.log(`KI-Chat läuft auf Port ${PORT}`);
 });
-
-function resetChat() {
-if (busy) return;
-
-conversation = [];
-messagesElement.replaceChildren();
-updateLayout();
-input.value = "";
-input.focus();
-}
-
-document.getElementById("newChat").addEventListener("click", resetChat);
-document.getElementById("clearButton").addEventListener("click", resetChat);
-document.getElementById("refreshModels").addEventListener("click", loadModels);
-
-document.getElementById("menuButton").addEventListener("click", () => {
-document.getElementById("sidebar").classList.toggle("open");
-});
-
-modelSelect.addEventListener("change", () => {
-modelStatus.textContent = modelSelect.value || "Modell auswählen";
-});
-
-messagesElement.hidden = true;
-loadModels();
-
-welcome.hidden = true;
-messagesElement.hidden = false;
