@@ -1,92 +1,119 @@
 
-const promptInput = document.getElementById("messageInput");
-const chatForm = document.getElementById("chatForm");
-const sendBtn = document.getElementById("sendButton");
-const messagesEl = document.getElementById("messages");
-const welcomeEl = document.getElementById("welcome");
+"use strict";
 
-const sidebar = document.getElementById("sidebar");
-const openSidebarBtn = document.getElementById("openSidebar");
-const closeSidebarBtn = document.getElementById("closeSidebar");
-const newChatBtn = document.getElementById("newChat");
-const clearChatBtn = document.getElementById("clearChat");
-const historyEl = document.getElementById("history");
+// Omni AI – Bedienung passend zur vorhandenen index.html
 
-const STORAGE_KEY = "nova-ai-chats-v1";
+const $ = (id) => document.getElementById(id);
 
-let chat = {
-  id: String(Date.now()),
-  title: "Neuer Chat",
-  messages: [],
-  updatedAt: Date.now(),
+const elements = {
+  sidebar: $("sidebar"),
+  menuButton: $("menuButton"),
+  newChat: $("newChat"),
+  clearButton: $("clearButton"),
+  chatForm: $("chatForm"),
+  messageInput: $("messageInput"),
+  sendButton: $("sendButton"),
+  messages: $("messages"),
+  welcome: $("welcome"),
+  modelSelect: $("modelSelect"),
+  refreshModels: $("refreshModels"),
+  connectionStatus: $("connectionStatus"),
+  modelStatus: $("modelStatus"),
 };
 
-let busy = false;
+const STORAGE_KEY = "omni-ai-conversations-v2";
 
-function loadChats() {
+let messages = [];
+let busy = false;
+let currentChatId = createId();
+let currentModelDetails = null;
+let availableModels = [];
+
+function createId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function setStatus(text) {
+  if (elements.connectionStatus) {
+    elements.connectionStatus.textContent = text;
+  }
+}
+
+function setModelStatus(text) {
+  if (elements.modelStatus) {
+    elements.modelStatus.textContent = text;
+  }
+}
+
+function setBusy(value) {
+  busy = value;
+
+  if (elements.sendButton) {
+    elements.sendButton.disabled = value;
+    elements.sendButton.textContent = value ? "…" : "↑";
+  }
+
+  if (elements.messageInput) {
+    elements.messageInput.disabled = value;
+  }
+}
+
+function getSavedChats() {
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
-    return Array.isArray(saved) ? saved : [];
+    const value = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    return Array.isArray(value) ? value : [];
   } catch {
     return [];
   }
 }
 
-function saveChats() {
-  const chats = loadChats();
-  const index = chats.findIndex((item) => item.id === chat.id);
+function saveCurrentChat() {
+  if (!messages.length) return;
 
-  if (chat.messages.length) {
-    if (index >= 0) {
-      chats[index] = chat;
-    } else {
-      chats.unshift(chat);
-    }
+  const chats = getSavedChats();
+  const firstUserMessage = messages.find((item) => item.role === "user");
+
+  const chat = {
+    id: currentChatId,
+    title: firstUserMessage
+      ? firstUserMessage.content.slice(0, 60)
+      : "Neuer Chat",
+    messages,
+    updatedAt: Date.now(),
+  };
+
+  const index = chats.findIndex((item) => item.id === currentChatId);
+
+  if (index >= 0) {
+    chats[index] = chat;
+  } else {
+    chats.unshift(chat);
   }
 
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(chats.slice(0, 50)));
-  renderHistory();
-}
-
-function renderHistory() {
-  if (!historyEl) return;
-
-  historyEl.replaceChildren();
-
-  for (const item of loadChats()) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "history-item";
-    button.textContent = item.title || "Chat";
-    button.addEventListener("click", () => {
-      chat = {
-        ...item,
-        messages: Array.isArray(item.messages) ? item.messages : [],
-      };
-      renderMessages();
-      if (sidebar) sidebar.classList.remove("open");
-    });
-    historyEl.appendChild(button);
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(chats.slice(0, 30)));
+  } catch (error) {
+    console.warn("Chat konnte nicht gespeichert werden:", error.message);
   }
 }
 
-function addMessage(role, content, details = null) {
+function renderMessage(message) {
   const article = document.createElement("article");
-  article.className = `message ${role}`;
+  article.className = `message ${message.role}`;
 
-  const roleLabel = document.createElement("div");
-  roleLabel.className = "message-role";
-  roleLabel.textContent = role === "user" ? "Du" : "KI";
+  const label = document.createElement("div");
+  label.className = "message-role";
+  label.textContent = message.role === "user" ? "Du" : "Omni AI";
 
-  const body = document.createElement("div");
-  body.className = "message-content";
-  body.textContent = content;
+  const content = document.createElement("div");
+  content.className = "message-content";
+  content.textContent = message.content;
 
-  article.append(roleLabel, body);
+  article.append(label, content);
 
-  if (role === "assistant" && details) {
-    const detailBox = document.createElement("details");
-    detailBox.className = "answer-details";
+  if (message.role === "assistant" && message.details) {
+    const details = document.createElement("details");
+    details.className = "answer-details";
 
     const summary = document.createElement("summary");
     summary.textContent = "Antwortdetails";
@@ -94,126 +121,231 @@ function addMessage(role, content, details = null) {
     const info = document.createElement("div");
     info.className = "answer-model-info";
 
-    const modelLine = document.createElement("p");
-    modelLine.textContent = `Modell: ${details.modelName || details.model || "Automatisch ausgewählt"}`;
+    const model = document.createElement("p");
+    model.textContent =
+      "Modell: " +
+      (message.details.modelName ||
+        message.details.model ||
+        "Automatisch ausgewählt");
 
-    const taskLine = document.createElement("p");
+    info.appendChild(model);
+
     const taskNames = {
       coding: "Programmieren",
       creative: "Kreatives Schreiben",
       reasoning: "Analyse und logisches Denken",
       general: "Allgemeine Anfrage",
     };
-    taskLine.textContent = `Aufgabentyp: ${taskNames[details.task] || "Allgemein"}`;
 
-    info.append(modelLine, taskLine);
-
-    if (details.fallbackUsed) {
-      const fallbackLine = document.createElement("p");
-      fallbackLine.textContent = "Ein alternatives Modell wurde verwendet.";
-      info.appendChild(fallbackLine);
+    if (message.details.task) {
+      const task = document.createElement("p");
+      task.textContent =
+        "Aufgabe: " + (taskNames[message.details.task] || "Allgemein");
+      info.appendChild(task);
     }
 
-    detailBox.append(summary, info);
-    article.appendChild(detailBox);
+    if (message.details.fallbackUsed) {
+      const fallback = document.createElement("p");
+      fallback.textContent =
+        "Ein alternatives Modell wurde verwendet.";
+      info.appendChild(fallback);
+    }
+
+    details.append(summary, info);
+    article.appendChild(details);
   }
 
-  messagesEl.appendChild(article);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  elements.messages.appendChild(article);
 }
 
 function renderMessages() {
-  messagesEl.replaceChildren();
+  if (!elements.messages) return;
 
-  const hasMessages = chat.messages.length > 0;
+  elements.messages.replaceChildren();
 
-  if (welcomeEl) {
-    welcomeEl.hidden = hasMessages;
+  for (const message of messages) {
+    renderMessage(message);
   }
 
-  for (let i = 0; i < chat.messages.length; i++) {
-    const message = chat.messages[i];
-
-    // Antwortdetails werden lokal mitgespeichert, falls vorhanden.
-    addMessage(message.role, message.content, message.details || null);
+  if (elements.welcome) {
+    elements.welcome.hidden = messages.length > 0;
   }
 
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  elements.messages.scrollTop = elements.messages.scrollHeight;
+}
+
+function showError(text) {
+  renderMessage({
+    role: "assistant",
+    content: "Fehler: " + text,
+  });
+
+  if (elements.messages) {
+    elements.messages.scrollTop = elements.messages.scrollHeight;
+  }
 }
 
 function startNewChat() {
-  chat = {
-    id: String(Date.now()),
-    title: "Neuer Chat",
-    messages: [],
-    updatedAt: Date.now(),
-  };
+  messages = [];
+  currentChatId = createId();
+  currentModelDetails = null;
 
   renderMessages();
+  setModelStatus("Automatische KI-Auswahl");
 
-  if (promptInput) promptInput.focus();
-  if (sidebar) sidebar.classList.remove("open");
-}
-
-function setBusy(value) {
-  busy = value;
-
-  if (sendBtn) {
-    sendBtn.disabled = value;
-    sendBtn.textContent = value ? "Denke nach …" : "Senden";
+  if (elements.sidebar) {
+    elements.sidebar.classList.remove("open");
   }
 
-  if (promptInput) {
-    promptInput.disabled = value;
+  if (elements.messageInput) {
+    elements.messageInput.value = "";
+    elements.messageInput.focus();
+  }
+}
+
+function clearCurrentChat() {
+  if (!messages.length) {
+    startNewChat();
+    return;
+  }
+
+  if (!confirm("Möchtest du diesen Chat wirklich leeren?")) return;
+
+  const remaining = getSavedChats().filter(
+    (chat) => chat.id !== currentChatId
+  );
+
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(remaining));
+  } catch (error) {
+    console.warn("Chatverlauf konnte nicht aktualisiert werden.");
+  }
+
+  startNewChat();
+}
+
+async function checkConnection() {
+  try {
+    const response = await fetch("/api/health", {
+      cache: "no-store",
+    });
+
+    const data = await response.json();
+
+    if (!response.ok || data.status !== "ok") {
+      throw new Error("Backend nicht erreichbar");
+    }
+
+    setStatus(data.configured ? "Verbunden" : "API-Key fehlt");
+  } catch (error) {
+    setStatus("Verbindung prüfen");
+    console.warn("Verbindungstest:", error.message);
+  }
+}
+
+async function loadModels() {
+  // Die Auswahl erfolgt automatisch. Die Liste wird nur intern
+  // zur Anzeige bzw. Diagnose geladen.
+  if (elements.modelSelect) {
+    elements.modelSelect.replaceChildren();
+
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "Automatische Auswahl";
+    elements.modelSelect.appendChild(option);
+
+    // Technische Modellliste aus der Oberfläche entfernen.
+    const row = elements.modelSelect.closest(".model-row");
+    if (row) row.hidden = true;
+  }
+
+  setModelStatus("Automatische KI-Auswahl");
+
+  try {
+    const response = await fetch("/api/models", {
+      cache: "no-store",
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "Modellliste nicht verfügbar");
+    }
+
+    availableModels = Array.isArray(data.models) ? data.models : [];
+
+    setStatus("Verbunden");
+    console.log(
+      `Omni AI: ${availableModels.length} Modelle gefunden.`
+    );
+  } catch (error) {
+    // Chatversuche bleiben möglich; das Backend meldet gegebenenfalls
+    // einen konkreten Fehler bei der eigentlichen Anfrage.
+    console.warn("Modellliste nicht verfügbar:", error.message);
   }
 }
 
 async function sendMessage(event) {
-  event?.preventDefault();
+  if (event) event.preventDefault();
 
-  if (busy || !promptInput || !messagesEl) return;
+  if (busy || !elements.messageInput || !elements.messages) return;
 
-  const text = promptInput.value.trim();
+  const text = elements.messageInput.value.trim();
   if (!text) return;
 
-  chat.messages.push({ role: "user", content: text });
+  messages.push({
+    role: "user",
+    content: text,
+  });
 
-  if (chat.title === "Neuer Chat") {
-    chat.title = text.length > 45 ? `${text.slice(0, 45)}…` : text;
+  if (elements.welcome) {
+    elements.welcome.hidden = true;
   }
 
-  chat.updatedAt = Date.now();
-  promptInput.value = "";
-
   renderMessages();
-  saveChats();
+  saveCurrentChat();
+
+  elements.messageInput.value = "";
+  elements.messageInput.style.height = "";
+
   setBusy(true);
+  setModelStatus("KI analysiert deine Anfrage …");
 
   try {
     const response = await fetch("/api/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({
-        messages: chat.messages.slice(-30).map((message) => ({
-          role: message.role,
-          content: message.content,
-        })),
+        messages: messages
+          .filter((item) =>
+            ["user", "assistant"].includes(item.role)
+          )
+          .slice(-30)
+          .map((item) => ({
+            role: item.role,
+            content: item.content,
+          })),
       }),
     });
 
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok) {
-      throw new Error(data.error || `Anfrage fehlgeschlagen (${response.status}).`);
+      throw new Error(
+        data.error ||
+          `Die Anfrage ist fehlgeschlagen (HTTP ${response.status}).`
+      );
     }
 
     if (typeof data.answer !== "string" || !data.answer.trim()) {
-      throw new Error("Die KI hat keine Textantwort zurückgegeben.");
+      throw new Error("Die KI hat keine Antwort zurückgegeben.");
     }
 
     const assistantMessage = {
       role: "assistant",
-      content: data.answer,
+      content: data.answer.trim(),
       details: {
         model: data.model,
         modelName: data.modelName,
@@ -222,59 +354,82 @@ async function sendMessage(event) {
       },
     };
 
-    chat.messages.push(assistantMessage);
-    chat.updatedAt = Date.now();
+    messages.push(assistantMessage);
+    currentModelDetails = assistantMessage.details;
 
     renderMessages();
-    saveChats();
-  } catch (error) {
-    addMessage(
-      "assistant",
-      `Fehler: ${error.message || "Die Anfrage ist fehlgeschlagen."}`
+    saveCurrentChat();
+
+    setModelStatus(
+      data.fallbackUsed
+        ? "Automatische Auswahl · Ersatzmodell verwendet"
+        : "Automatische KI-Auswahl"
     );
+  } catch (error) {
+    // Nutzernachricht bleibt im Chat, damit sie erneut gesendet werden kann.
+    showError(error.message || "Unbekannter Fehler");
+    setModelStatus("Anfrage fehlgeschlagen");
   } finally {
     setBusy(false);
-    if (promptInput) promptInput.focus();
+
+    if (elements.messageInput) {
+      elements.messageInput.focus();
+    }
   }
 }
 
-if (chatForm) {
-  chatForm.addEventListener("submit", sendMessage);
+// Formular: Klick auf den Senden-Button und Formular-Submit.
+if (elements.chatForm) {
+  elements.chatForm.addEventListener("submit", sendMessage);
 }
 
-if (openSidebarBtn && sidebar) {
-  openSidebarBtn.addEventListener("click", () => {
-    sidebar.classList.add("open");
+// Menü für Smartphones.
+if (elements.menuButton && elements.sidebar) {
+  elements.menuButton.addEventListener("click", () => {
+    elements.sidebar.classList.toggle("open");
   });
 }
 
-if (closeSidebarBtn && sidebar) {
-  closeSidebarBtn.addEventListener("click", () => {
-    sidebar.classList.remove("open");
+// Neuer Chat.
+if (elements.newChat) {
+  elements.newChat.addEventListener("click", startNewChat);
+}
+
+// Aktuellen Chat leeren.
+if (elements.clearButton) {
+  elements.clearButton.addEventListener("click", clearCurrentChat);
+}
+
+// Modellliste erneut prüfen.
+if (elements.refreshModels) {
+  elements.refreshModels.addEventListener("click", loadModels);
+}
+
+// Vorschlagskarten befüllen das Eingabefeld.
+document.querySelectorAll("[data-prompt]").forEach((button) => {
+  button.addEventListener("click", () => {
+    if (!elements.messageInput || busy) return;
+
+    elements.messageInput.value = button.dataset.prompt || "";
+    elements.messageInput.focus();
+
+    if (elements.sidebar) {
+      elements.sidebar.classList.remove("open");
+    }
   });
-}
-
-if (newChatBtn) {
-  newChatBtn.addEventListener("click", startNewChat);
-}
-
-if (clearChatBtn) {
-  clearChatBtn.addEventListener("click", () => {
-    if (!confirm("Möchtest du diesen Chat wirklich löschen?")) return;
-
-    const chats = loadChats().filter((item) => item.id !== chat.id);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(chats));
-    startNewChat();
-    renderHistory();
-  });
-}
-
-// Verhindert, dass eine vorhandene Modellauswahl nötig ist.
-document.querySelectorAll(
-  "#modelSelect, #modelSelector, .model-selector"
-).forEach((element) => {
-  element.hidden = true;
 });
 
-renderHistory();
+// Eingabefeld wächst beim Schreiben mit.
+if (elements.messageInput) {
+  elements.messageInput.addEventListener("input", () => {
+    elements.messageInput.style.height = "auto";
+    elements.messageInput.style.height =
+      Math.min(elements.messageInput.scrollHeight, 180) + "px";
+  });
+}
+
+// Begrüßung und Verbindung initialisieren.
+setModelStatus("Automatische KI-Auswahl");
 renderMessages();
+checkConnection();
+loadModels();
