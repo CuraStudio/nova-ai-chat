@@ -1,1 +1,107 @@
+<!DOCTYPE html><html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101116">
+  <title>Multi-KI Chat</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/script.js" defer></script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-icon">✳</div>
+        <div>
+          <strong>Omni AI</strong>
+          <small>Dein KI-Arbeitsplatz</small>
+        </div>
+      </div>  <button class="new-chat" id="newChat">＋ Neuer Chat</button>
 
+  <div class="side-label">DEINE MODELLE</div>
+  <div class="provider-card">
+    <span class="status-dot"></span>
+    <div>
+      <strong>NVIDIA NIM</strong>
+      <small id="connectionStatus">Verbindung wird geprüft …</small>
+    </div>
+  </div>
+
+  <div class="side-bottom">
+    <span class="shield">♧</span>
+    API-Schlüssel bleiben auf dem Server.
+  </div>
+</aside>
+
+<main class="main">
+  <header class="topbar">
+    <button class="icon-button mobile-menu" id="menuButton"
+      aria-label="Menü öffnen">☰</button>
+    <div>
+      <strong>KI-Assistent</strong>
+      <small id="modelStatus">Modell auswählen</small>
+    </div>
+    <button class="icon-button" id="clearButton"
+      aria-label="Chat leeren" title="Chat leeren">↺</button>
+  </header>
+
+  <section class="workspace">
+    <div class="welcome" id="welcome">
+      <div class="welcome-symbol">✳</div>
+      <h1>Was möchtest du herausfinden?</h1>
+      <p>Wähle ein verfügbares Modell und starte deinen Chat.</p>
+
+      <div class="suggestions">
+        <button data-prompt="Erkläre mir ein komplexes Thema einfach.">
+          <span>◈</span>
+          <strong>Etwas verstehen</strong>
+          <small>Komplexe Themen einfach erklärt</small>
+        </button>
+        <button data-prompt="Hilf mir, eine kreative Geschichte zu entwickeln.">
+          <span>✎</span>
+          <strong>Kreativ werden</strong>
+          <small>Ideen und Geschichten entwickeln</small>
+        </button>
+        <button data-prompt="Schreibe und erkläre ein JavaScript-Beispiel.">
+          <span>⌘</span>
+          <strong>Programmieren</strong>
+          <small>Code schreiben und verbessern</small>
+        </button>
+        <button data-prompt="Erstelle einen konkreten Schritt-für-Schritt-Plan.">
+          <span>☷</span>
+          <strong>Etwas planen</strong>
+          <small>Struktur und nächste Schritte</small>
+        </button>
+      </div>
+    </div>
+
+    <div class="messages" id="messages" aria-live="polite"></div>
+  </section>
+
+  <footer class="composer-area">
+    <div class="model-row">
+      <label for="modelSelect">Modell</label>
+      <select id="modelSelect">
+        <option value="">Modelle werden geladen …</option>
+      </select>
+      <button class="refresh-button" id="refreshModels"
+        title="Modellliste aktualisieren">⟳</button>
+    </div>
+
+    <form class="composer" id="chatForm">
+      <textarea id="messageInput" rows="1"
+        placeholder="Schreibe deine Nachricht …"
+        aria-label="Nachricht" maxlength="12000" required></textarea>
+      <button class="send-button" id="sendButton" type="submit"
+        aria-label="Nachricht senden">↑</button>
+    </form>
+    <p class="disclaimer">
+      KI-Antworten können Fehler enthalten. Kostenlose Kontingente
+      und Modellzugriffe hängen vom Anbieter ab.
+    </p>
+  </footer>
+</main>
+
+  </div>
+</body>
+</html>
